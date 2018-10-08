@@ -20,9 +20,7 @@ import Foreign.C.Error
 type App = ((Socket,SockAddr) -> IO ())
 type RaceCheck = (IPv4 -> IO Bool)
 type RaceCheckUnblock = (IPv4 -> IO ())
-type Logger = (String -> IO ())
 data State = State { port :: PortNumber
-                   , logger :: Logger
                    , raceCheckBlock :: RaceCheck
                    , raceCheckNonBlock :: RaceCheck
                    , raceCheckUnblock :: RaceCheckUnblock
@@ -30,46 +28,28 @@ data State = State { port :: PortNumber
                    , peers :: [IPv4]
                    }
 
+logger _ = return ()
 seconds = 1000000
 respawnDelay = 10 * seconds
 idleDelay = 100 * seconds
 
 session :: PortNumber -> App -> [IPv4] -> IO ()
 session port defaultApp peers = do
--- TODO make this a monad to hide the logger plumbing
     state <- mkState port defaultApp peers
     listener state
     mapM_ ( forkIO . run state ) peers
 
-{-
 mkState port defaultApp peers = do
-    logger <- getLogger
-    mapMVar <- newMVar Data.Map.empty
-    let raceCheckNonBlock = raceCheck False mapMVar
-        raceCheckBlock = raceCheck True mapMVar
-        raceCheckUnblock = raceCheckUnblocker mapMVar
-    return State {..}
--}
-
-mkState port defaultApp peers = do
-    logger <- getLogger
     mapMVar <- newMVar Data.Map.empty
     let raceCheckNonBlock port = do result <- raceCheck False mapMVar port
-                                    putStrLn $ "raceCheckNonBlock: " ++ show port ++ " : " ++ show result
+                                    -- debug -- putStrLn $ "raceCheckNonBlock: " ++ show port ++ " : " ++ show result
                                     return result
         raceCheckBlock port    = do result <- raceCheck True mapMVar port
-                                    putStrLn $ "raceCheckBlock: " ++ show port ++ " : " ++ show result
+                                    -- debug -- putStrLn $ "raceCheckBlock: " ++ show port ++ " : " ++ show result
                                     return result
-        raceCheckUnblock port  = do putStrLn $ "raceCheckUnblocker: " ++ show port
+        raceCheckUnblock port  = do -- debug -- putStrLn $ "raceCheckUnblocker: " ++ show port
                                     raceCheckUnblocker mapMVar port
     return State {..}
-
-getLogger = do
-    let logThread mvar = do takeMVar mvar >>= hPutStrLn stderr
-                            logThread mvar
-    logMVar <- newEmptyMVar
-    forkIO ( logThread logMVar )
-    return (putMVar logMVar)
 
 -- RACE CHECK
 -- before calling the application perform a race check
@@ -180,6 +160,8 @@ run state@State{..} ip = do
              return $ Just sock )
         (\e -> do
             Errno errno <- getErrno
+            -- most errors are timeouts or connection rejections from unattended ports
+            -- a better way to report would be handy - repeated console messages are not useful!
             logger $ "Exception connecting to " ++ show ip ++ " - " ++ errReport errno e
             return Nothing )
 
